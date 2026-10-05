@@ -1,39 +1,47 @@
-name: Build COA AzerothCore
+name: Build COA AzerothCore Windows
 on:
-  workflow_dispatch: # 支持手动点击触发编译
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
-    - name: 拉取源码
+    - name: Checkout source
       uses: actions/checkout@v4
       with:
         submodules: true
         fetch-depth: 0
 
-    - name: 安装系统依赖
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y git cmake gcc g++ libmysqlclient-dev libssl-dev libbz2-dev libreadline-dev libncurses-dev libboost-all-dev
+    - name: Setup vcpkg
+      uses: microsoft/vcpkg-setup@v1
+      with:
+        vcpkg-commit: 5e4a327ff2f706486d50f14c8440f38c87b10e5b
 
-    - name: CMake配置
+    - name: Install required libraries
       run: |
-        mkdir build && cd build
-        cmake ../ -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/dist \
-          -DSCRIPTS=static \
-          -DMODULES=static \
-          -DTOOLS_BUILD=none \
-          -DWITH_WARNINGS=OFF
+        vcpkg install boost:x64-windows mysql:x64-windows openssl:x64-windows bzip2:x64-windows readline:x64-windows
+        vcpkg integrate install
 
-    - name: 编译 & 安装
+    - name: CMake Configure
+      run: |
+        mkdir build
+        cd build
+        cmake ../ -G "Visual Studio 17 2022" -A x64 `
+        -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+        -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/dist" `
+        -DSCRIPTS=static `
+        -DMODULES=static `
+        -DTOOLS_BUILD=none `
+        -DWITH_WARNINGS=OFF
+
+    - name: Build Release
       run: |
         cd build
-        make -j$(nproc)
-        make install
+        cmake --build . --config Release
+        cmake --install .
 
-    - name: 上传编译产物
+    - name: Upload compiled binaries
       uses: actions/upload-artifact@v4
       with:
-        name: coa-linux-bin
+        name: coa-windows-bin
         path: dist/
