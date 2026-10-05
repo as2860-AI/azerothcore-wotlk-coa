@@ -1,0 +1,39 @@
+name: Build COA AzerothCore
+on:
+  workflow_dispatch: # 支持手动点击触发编译
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 拉取源码
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+        fetch-depth: 0
+
+    - name: 安装系统依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git cmake gcc g++ libmysqlclient-dev libssl-dev libbz2-dev libreadline-dev libncurses-dev libboost-all-dev
+
+    - name: CMake配置
+      run: |
+        mkdir build && cd build
+        cmake ../ -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/dist \
+          -DSCRIPTS=static \
+          -DMODULES=static \
+          -DTOOLS_BUILD=none \
+          -DWITH_WARNINGS=OFF
+
+    - name: 编译 & 安装
+      run: |
+        cd build
+        make -j$(nproc)
+        make install
+
+    - name: 上传编译产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: coa-linux-bin
+        path: dist/
