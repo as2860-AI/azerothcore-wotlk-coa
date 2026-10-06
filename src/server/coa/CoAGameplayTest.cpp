@@ -46,6 +46,7 @@
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Pet.h"
+#include "PetPackets.h"
 #include "Player.h"
 #include "QuestDef.h"
 #include "QueryCallback.h"
@@ -114,6 +115,7 @@ constexpr uint32 MaximumActors = 8;
 constexpr uint16 LevelScalingOpcode = 0x0667;
 constexpr uint16 ApplyAppearancesOpcode = 0x0697;
 constexpr uint16 KnownEntriesUploadOpcode = 0x0727;
+constexpr uint16 KnownEntriesOpcode = 0x0726;
 constexpr uint16 UpdateEntriesResultOpcode = 0x072C;
 constexpr uint32 TalentRequestWindowMs = 2000;
 constexpr std::size_t QuestQueryFlagsOffset = 80;
@@ -1775,6 +1777,11 @@ private:
             return unit->GetPositionZ();
         if (metric == "combat")
             return unit->IsInCombat();
+        if (metric == "channel_object_entry")
+        {
+            ObjectGuid const channelObject = unit->GetGuidValue(UNIT_FIELD_CHANNEL_OBJECT);
+            return channelObject.IsEmpty() || channelObject == unit->GetGUID() ? 0.0 : double(channelObject.GetEntry());
+        }
         if (metric == "casting")
             return unit->IsNonMeleeSpellCast(false);
         if (metric == "moving")
@@ -1950,6 +1957,17 @@ private:
             Require(sSpellMgr->GetSpellInfo(spell) != nullptr, "Unknown spell in metric");
             return ProcCounter::Count(unit->GetGUID(), spell);
         }
+        if (metric == "owned_creature_spell_proc_count")
+        {
+            Creature* creature = GetOwnedCreature(unit->ToPlayer(), step.get<uint32>("entry"));
+            Require(creature != nullptr, "Proc observation needs a present owned creature");
+            Require(sSpellMgr->GetSpellInfo(spell) != nullptr, "Unknown owned creature proc spell");
+            return ProcCounter::Count(creature->GetGUID(), spell);
+        }
+        if (metric == "combo_points")
+            return unit->ToPlayer()->GetComboPoints();
+        if (metric == "game_mode_mask")
+            return sScriptMgr->OnPlayerGetGameModeMask(unit->ToPlayer()).value_or(0);
         if (metric == "spell_proc_chance")
         {
             SpellProcEntry const* entry = sSpellMgr->GetSpellProcEntry(spell);
@@ -2178,13 +2196,15 @@ private:
         }
         if (metric == "loot_received")
             return _actors.at(step.get<std::string>("actor")).lootReceived;
-        if (metric == "nearby_gameobject_count")
+        if (metric == "nearby_gameobject_count" || metric == "nearby_gameobject_quest_active")
         {
+            bool const questActiveOnly = metric == "nearby_gameobject_quest_active";
             std::list<GameObject*> objects;
             player->GetGameObjectListWithEntryInGrid(objects, step.get<uint32>("entry"), 20.0f);
-            objects.remove_if([player](GameObject* object)
+            objects.remove_if([player, questActiveOnly](GameObject* object)
             {
-                return !object->IsInWorld() || !player->InSamePhase(object);
+                return !object->IsInWorld() || !player->InSamePhase(object) ||
+                    (questActiveOnly && !object->ActivateToQuest(player));
             });
             return objects.size();
         }
@@ -2617,7 +2637,7 @@ private:
             Require(info != nullptr, "Unknown spell for damage calculation");
             Unit* caster = step.get<bool>("pet", false) ? static_cast<Unit*>(player->GetPet()) : player;
             Require(caster != nullptr, "Spell damage query needs a present pet");
-            return caster->SpellDamageBonusDone(target, info, 1000,
+            return caster->SpellDamageBonusDone(target, info, step.get<uint32>("base", 1000),
                 step.get<bool>("periodic", false) ? DOT : SPELL_DIRECT_DAMAGE,
                 uint8(step.get<uint32>("effect", EFFECT_0)));
         }
@@ -2838,6 +2858,15 @@ private:
             auto const& reasons = _actors.at(step.get<std::string>("actor")).castFailureReason;
             auto const found = reasons.find(spell);
             return found == reasons.end() ? 0.0 : double(found->second);
+        }
+        if (metric == "pet_autocast_enabled")
+        {
+            Pet* pet = player->GetPet();
+            Require(pet != nullptr, "Pet autocast observation needs a current pet");
+            for (uint8 index = 0; index < pet->GetPetAutoSpellSize(); ++index)
+                if (pet->GetPetAutoSpellOnPos(index) == spell)
+                    return 1;
+            return 0;
         }
         if (metric == "pet_casting")
         {
@@ -3294,6 +3323,24 @@ private:
             auto const found = packets.find(uint16(step.get<uint32>("opcode")));
             return found == packets.end() ? 0.0 : double(found->second);
         }
+        if (metric == "known_entry_rank")
+        {
+            Actor const& actor = _actors.at(step.get<std::string>("actor"));
+            auto const found = actor.extensionPayloads.find(KnownEntriesOpcode);
+            if (found == actor.extensionPayloads.end() || found->second.empty())
+                return -1;
+            std::string const& payload = found->second.back();
+            std::vector<AscensionCoATalentState::KnownEntry> known;
+            if (!AscensionCoATalentState::ParseKnownEntriesUpload(
+                reinterpret_cast<uint8 const*>(payload.data()), payload.size(), known))
+                return -1;
+            uint32 const entryId = step.get<uint32>("entry");
+            auto const selected = std::find_if(known.begin(), known.end(), [entryId](auto const& entry)
+            {
+                return entry.EntryId == entryId;
+            });
+            return selected == known.end() ? 0 : selected->Rank;
+        }
         if (metric == "server_packet_u32")
         {
             Actor const& actor = _actors.at(step.get<std::string>("actor"));
@@ -3429,9 +3476,10 @@ private:
             {
                 _talentRequestSent = true;
                 _talentResultsBefore = results;
+                auto const current = GetAscensionKnownTalentEntries(player);
                 WorldPacket upload = KnownEntriesUpload(specialization
                     ? AscensionCoATalentState::SpecializationSwitch(player->getClass(), SpellbookOf(player),
-                        step.get<uint32>("id"))
+                        step.get<uint32>("id"), &current)
                     : KnownEntriesWithRank(player, step.get<uint32>("entry"), step.get<uint32>("rank")));
                 Require(ReceiveEarly(player, upload), "No early packet hook consumed the known-entries upload");
                 return;
@@ -4189,6 +4237,16 @@ private:
         else if (action == "unlearn")
             player->removeSpell(spell, step.get<bool>("all_specs", false) ? SPEC_MASK_ALL :
                 player->GetActiveSpecMask(), false);
+        else if (action == "pet_autocast")
+        {
+            Pet* pet = player->GetPet();
+            Require(pet != nullptr, "Pet autocast request needs a current pet");
+            WorldPacket packet(CMSG_PET_SPELL_AUTOCAST, 13);
+            packet << pet->GetGUID() << spell << step.get<bool>("enabled");
+            WorldPackets::Pet::PetSpellAutocast request(std::move(packet));
+            request.Read();
+            player->GetSession()->HandlePetSpellAutocastOpcode(request);
+        }
         else if (action == "trainer_buy")
         {
             Unit* trainer = step.get_optional<std::string>("target")
@@ -4457,6 +4515,22 @@ private:
             player->TeleportTo(map, x, y, z, o);
             record.put("result", "teleport sent");
         }
+        else if (action == "teleport_to_spawn")
+        {
+            ObjectGuid::LowType const spawnId = step.get<ObjectGuid::LowType>("guid");
+            CreatureData const* spawn = sObjectMgr->GetCreatureData(spawnId);
+            Require(spawn != nullptr, "Unknown creature spawn to teleport to");
+            Position destination(spawn->posX, spawn->posY, spawn->posZ, spawn->orientation);
+            if (spawn->mapid == player->GetMapId())
+            {
+                auto const spawned = player->GetMap()->GetCreatureBySpawnIdStore().equal_range(spawnId);
+                if (spawned.first != spawned.second && spawned.first->second->IsInWorld())
+                    destination = spawned.first->second->GetPosition();
+            }
+            player->TeleportTo(spawn->mapid, destination.GetPositionX(), destination.GetPositionY(),
+                destination.GetPositionZ(), destination.GetOrientation());
+            record.put("result", "teleport sent");
+        }
         else if (action == "discover_taxi_node")
         {
             uint32 const node = step.get<uint32>("entry");
@@ -4563,8 +4637,7 @@ private:
     static std::vector<AscensionCoATalentState::KnownEntry> KnownEntriesWithRank(Player const* player, uint32 entryId,
         uint32 rank)
     {
-        std::vector<AscensionCoATalentState::KnownEntry> known =
-            AscensionCoATalentState::KnownEntries(player->getClass(), SpellbookOf(player));
+        std::vector<AscensionCoATalentState::KnownEntry> known = GetAscensionKnownTalentEntries(player);
         std::erase_if(known, [entryId](AscensionCoATalentState::KnownEntry const& item)
         {
             return item.EntryId == entryId;
