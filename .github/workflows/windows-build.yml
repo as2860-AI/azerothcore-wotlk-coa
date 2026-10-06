@@ -31,6 +31,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          # --- Boost 1.87.0 (msvc-14.3, 64-bit) prebuilt binaries -> C:\local\boost_1_87_0 ---
           if (-not (Test-Path 'C:\local\boost_1_87_0\boost'))
           {
               $boostExe = Join-Path $env:RUNNER_TEMP 'boost.exe'
@@ -67,6 +68,7 @@ jobs:
               if (-not (Test-Path 'C:\local\boost_1_87_0\lib64-msvc-14.3')) { throw 'Boost install missing prebuilt libs at C:\local\boost_1_87_0\lib64-msvc-14.3.' }
           }
 
+          # --- MySQL 8.4 client headers + libs -> C:\tools\mysql\current ---
           if (-not (Test-Path 'C:\tools\mysql\current\lib\mysqlclient.lib'))
           {
               $mysqlZip = Join-Path $env:RUNNER_TEMP 'mysql.zip'
@@ -81,6 +83,7 @@ jobs:
               if (-not (Test-Path 'C:\tools\mysql\current\lib\mysqlclient.lib')) { throw 'MySQL client import library missing at C:\tools\mysql\current\lib\mysqlclient.lib.' }
           }
 
+          # --- OpenSSL: use the copy already installed on the runner image ---
           $opensslRoot = @($env:OPENSSL_ROOT_DIR, 'C:\Program Files\OpenSSL', 'C:\Program Files\OpenSSL-Win64') |
               Where-Object { $_ -and (Test-Path (Join-Path $_ 'include\openssl\opensslv.h')) } |
               Select-Object -First 1
@@ -98,18 +101,20 @@ jobs:
       - name: Install (explicit)
         shell: bash
         run: |
-          # acore.sh 的 comp_compile 仅在 OSTYPE=msys* 时执行 cmake --install，
-          # Git Bash 下可能是 mingw64 导致跳过。这里显式安装一次，确保 .exe 被部署。
+          # acore.sh 只在 OSTYPE=msys* 时执行 cmake --install，GitHub 的 Git Bash
+          # 报告 mingw64 导致该分支被跳过。这里显式安装，确保 .exe 部署到 env/dist。
           BUILDDIR="$(pwd)/var/build/obj"
           cmake --install "$BUILDDIR" --config Release
       - name: List installed files
+        if: always()
         shell: bash
         run: |
           echo "=== env/dist contents ==="
           ls -la env/dist/
-          echo "=== .exe / .dll files ==="
-          find env/dist -maxdepth 2 $ -name '*.exe' -o -name '*.dll' $ | sort
+          echo "=== .exe files ==="
+          find env/dist -name '*.exe'
       - name: Upload binaries
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ac-windows-binaries
