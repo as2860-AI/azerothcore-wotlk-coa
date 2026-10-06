@@ -97,22 +97,34 @@ jobs:
         shell: bash
         run: |
           export CTOOLS_BUILD=all
+          # 强制 CMake 使用我们下载的 MySQL 8.4.9，而非 runner 预装的版本。
+          # acore.sh 里指向 C:\tools\mysql\current 的 OSOPTIONS 仅在 OSTYPE=msys* 时设置，
+          # GitHub Git Bash 是 mingw64 会跳过，导致编进 runner 自带的 8.0.x。
+          export CCUSTOMOPTIONS="-DMYSQL_INCLUDE_DIR=C:/tools/mysql/current/include -DMYSQL_LIBRARY=C:/tools/mysql/current/lib/mysqlclient.lib"
           ./acore.sh compiler build
       - name: Install (explicit)
         shell: bash
         run: |
-          # acore.sh 只在 OSTYPE=msys* 时执行 cmake --install，GitHub 的 Git Bash
-          # 报告 mingw64 导致该分支被跳过。这里显式安装，确保 .exe 部署到 env/dist。
           BUILDDIR="$(pwd)/var/build/obj"
           cmake --install "$BUILDDIR" --config Release
+          # 把与编译版本一致的 libmysql.dll 一并放进部署目录，
+          # 这样 Artifact 自包含，运行时不会因系统装了别的 MySQL 版本而触发 ACE00046。
+          MYSQL_HOME="C:/tools/mysql/current"
+          if [ -f "$MYSQL_HOME/bin/libmysql.dll" ]; then
+            cp -v "$MYSQL_HOME/bin/libmysql.dll" env/dist/
+          elif [ -f "$MYSQL_HOME/lib/libmysql.dll" ]; then
+            cp -v "$MYSQL_HOME/lib/libmysql.dll" env/dist/
+          else
+            echo "WARNING: libmysql.dll not found, runtime may fail with ACE00046"
+          fi
       - name: List installed files
         if: always()
         shell: bash
         run: |
           echo "=== env/dist contents ==="
           ls -la env/dist/
-          echo "=== .exe files ==="
-          find env/dist -name '*.exe'
+          echo "=== .exe / .dll files ==="
+          find env/dist -name '*.exe' -o -name '*.dll'
       - name: Upload binaries
         if: always()
         uses: actions/upload-artifact@v4
