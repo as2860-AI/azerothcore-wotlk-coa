@@ -4,11 +4,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   windows-build:
     runs-on: windows-latest
@@ -30,7 +28,6 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
           # --- Boost 1.87.0 (msvc-14.3, 64-bit) prebuilt binaries -> C:\local\boost_1_87_0 ---
           if (-not (Test-Path 'C:\local\boost_1_87_0\boost'))
           {
@@ -67,7 +64,6 @@ jobs:
               if (-not (Test-Path 'C:\local\boost_1_87_0\boost\version.hpp')) { throw 'Boost install missing headers at C:\local\boost_1_87_0\boost.' }
               if (-not (Test-Path 'C:\local\boost_1_87_0\lib64-msvc-14.3')) { throw 'Boost install missing prebuilt libs at C:\local\boost_1_87_0\lib64-msvc-14.3.' }
           }
-
           # --- MySQL 8.4 client headers + libs -> C:\tools\mysql\current ---
           if (-not (Test-Path 'C:\tools\mysql\current\lib\mysqlclient.lib'))
           {
@@ -82,7 +78,6 @@ jobs:
               Rename-Item 'C:\tools\mysql\mysql-8.4.9-winx64' 'C:\tools\mysql\current'
               if (-not (Test-Path 'C:\tools\mysql\current\lib\mysqlclient.lib')) { throw 'MySQL client import library missing at C:\tools\mysql\current\lib\mysqlclient.lib.' }
           }
-
           # --- OpenSSL: use the copy already installed on the runner image ---
           $opensslRoot = @($env:OPENSSL_ROOT_DIR, 'C:\Program Files\OpenSSL', 'C:\Program Files\OpenSSL-Win64') |
               Where-Object { $_ -and (Test-Path (Join-Path $_ 'include\openssl\opensslv.h')) } |
@@ -97,10 +92,8 @@ jobs:
         shell: bash
         run: |
           export CTOOLS_BUILD=all
-          # 强制 CMake 使用我们下载的 MySQL 8.4.9，而非 runner 预装的版本。
-          # acore.sh 里指向 C:\tools\mysql\current 的 OSOPTIONS 仅在 OSTYPE=msys* 时设置，
-          # GitHub Git Bash 是 mingw64 会跳过，导致编进 runner 自带的 8.0.x。
-          export CCUSTOMOPTIONS="-DMYSQL_INCLUDE_DIR=C:/tools/mysql/current/include -DMYSQL_LIBRARY=C:/tools/mysql/current/lib/mysqlclient.lib"
+          # 重点：增加 -DACORE_MODULE_SCRIPTS=ON 开启模块SQL收集并打包进exe
+          export CCUSTOMOPTIONS="-DMYSQL_INCLUDE_DIR=C:/tools/mysql/current/include -DMYSQL_LIBRARY=C:/tools/mysql/current/lib/mysqlclient.lib -DACORE_MODULE_SCRIPTS=ON"
           ./acore.sh compiler build
       - name: Install (explicit)
         shell: bash
