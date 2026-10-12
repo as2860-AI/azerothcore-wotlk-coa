@@ -1,8 +1,9 @@
 name: windows-build
 on:
   push:
-    branches: [main]
+    branches: [Playerbot]
   pull_request:
+    branches: [Playerbot]
   workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,6 +16,11 @@ jobs:
       BOOST_ROOT: C:\local\boost_1_87_0
     steps:
       - uses: actions/checkout@v4
+      - name: Clone my forked mod-playerbots
+        shell: bash
+        run: |
+          mkdir -p modules
+          git clone --branch master https://github.com/as2860-AI/mod-playerbots.git modules/mod-playerbots
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.13
       - name: Cache Boost & MySQL
@@ -124,4 +130,4 @@ jobs:
         with:
           name: ac-windows-binaries
           path: env/dist/
-          retention-days: 14
+          retention-days: 90
