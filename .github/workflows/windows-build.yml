@@ -54,6 +54,8 @@ jobs:
       - name: 建造
         shell: bash
         run: |
+          # 进入acore源码根目录（关键修复！）
+          cd $GITHUB_WORKSPACE
           export CTOOLS_BUILD=all
           export CCUSTOMOPTIONS="-DMYSQL_INCLUDE_DIR=C:/ProgramData/MySQL/MySQLServer8.0/include -DMYSQL_LIBRARY=C:/ProgramData/MySQL/MySQLServer8.0/lib/libmysql.lib"
           export CCUSTOMOPTIONS+=" -DBOOST_ROOT=${BOOST_ROOT} -DBOOST_LIBRARYDIR=${BOOST_LIBRARYDIR}"
@@ -62,11 +64,13 @@ jobs:
       - name: 安装 (显式)
         shell: bash
         run: |
+          cd $GITHUB_WORKSPACE
           ./acore.sh compiler install
 
       - name: 列表已安装文件
         shell: bash
         run: |
+          cd $GITHUB_WORKSPACE
           ls -la bin/Release/
 
       - name: 上传二进制
