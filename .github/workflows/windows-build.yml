@@ -1,81 +1,54 @@
-name: windows-build
+name: Build COA + Playerbots Windows
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  BOOST_ROOT: C:\local\boost_1_82_0
+  MSYS_NO_PATHCONV: 1
 
 jobs:
-  windows-build:
-    runs-on: windows-latest
-    name: Windows-最新
-    env:
-      BOOST_ROOT: C:\Libraries\boost_1_84_0
-      BOOST_LIBRARYDIR: C:\Libraries\boost_1_84_0\lib64-msvc-14.3
+  build:
+    runs-on: windows-2022
     steps:
-      - name: 运行动作/checkout@v4
+      # 拉取 COA 核心到仓库根目录
+      - name: Checkout azerothcore-wotlk-coa
         uses: actions/checkout@v4
+        with:
+          repository: as2860-AI/azerothcore-wotlk-coa
+          ref: master
 
-      - name: Clone my forked mod-playerbots
+      # 拉取 playerbots 模块，放入 coa 的 modules/mod-playerbots
+      - name: Checkout mod-playerbots into modules
+        uses: actions/checkout@v4
+        with:
+          repository: as2860-AI/mod-playerbots
+          ref: master
+          path: ./modules/mod-playerbots
+
+      # 安装Boost
+      - name: Setup Boost 1.82.0
+        uses: ilammy/setup-boost@v1
+        with:
+          version: 1.82.0
+
+      # 安装AC依赖
+      - name: Install dependencies
         shell: bash
         run: |
-          mkdir -p modules
-          for i in {1..3}; do
-            git clone --branch coa https://github.com/as2860-AI/mod-playerbots.git modules/mod-playerbots && break
-            echo "Clone attempt $i failed, retry after 10s"
-            sleep 10
-          done
+          chmod +x acore.sh
+          ./acore.sh install-deps
 
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: windows-${{ github.sha }}
-
-      - name: 缓存提升与MySQL
-        uses: actions/cache@v4
-        with:
-          path: |
-            C:\Libraries\boost_1_84_0
-            C:\ProgramData\MySQL
-          key: win-coa-boost-mysql-v1
-
-      - name: 配置操作系统
-        shell: pwsh
-        run: |
-          choco install mysql --version=8.0.36 -y
-          choco install boost-msvc-14.3 --version=1.84.0 -y
-          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-          choco install ninja -y
-          choco install git -y
-
-      - name: 建造
+      # CMake配置 + 编译
+      - name: Configure and Build
         shell: bash
         run: |
-          # 进入acore源码根目录（关键修复！）
-          cd $GITHUB_WORKSPACE
-          export CTOOLS_BUILD=all
-          export CCUSTOMOPTIONS="-DMYSQL_INCLUDE_DIR=C:/ProgramData/MySQL/MySQLServer8.0/include -DMYSQL_LIBRARY=C:/ProgramData/MySQL/MySQLServer8.0/lib/libmysql.lib"
-          export CCUSTOMOPTIONS+=" -DBOOST_ROOT=${BOOST_ROOT} -DBOOST_LIBRARYDIR=${BOOST_LIBRARYDIR}"
+          ./acore.sh compiler configure
           ./acore.sh compiler build
 
-      - name: 安装 (显式)
-        shell: bash
-        run: |
-          cd $GITHUB_WORKSPACE
-          ./acore.sh compiler install
-
-      - name: 列表已安装文件
-        shell: bash
-        run: |
-          cd $GITHUB_WORKSPACE
-          ls -la bin/Release/
-
-      - name: 上传二进制
+      # 上传编译产物
+      - name: Upload Binaries
         uses: actions/upload-artifact@v4
         with:
-          name: coa-server-bin
-          path: bin/Release/
-          retention-days: 14
+          name: COA-Playerbots-Win
+          path: ./env/dist/bin/
+          retention-days: 7
